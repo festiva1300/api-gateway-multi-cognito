@@ -1,0 +1,149 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  UserPool1:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: UserPool1
+
+  UserPool1ResourceServer:
+    Type: AWS::Cognito::UserPoolResourceServer
+    Properties:
+      Identifier: myresource
+      Name: MyResourceServer
+      UserPoolId: !Ref UserPool1
+      Scopes:
+        - ScopeName: read
+          ScopeDescription: Read access
+        - ScopeName: write
+          ScopeDescription: Write access
+
+  UserPool1Client:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: UserPool1ResourceServer
+    Properties:
+      ClientName: MyAppClient
+      UserPoolId: !Ref UserPool1
+      GenerateSecret: true
+      AllowedOAuthFlows:
+        - client_credentials
+      AllowedOAuthScopes:
+        - myresource/read
+        - myresource/write
+      AllowedOAuthFlowsUserPoolClient: true
+      ExplicitAuthFlows:
+        - ALLOW_CUSTOM_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+  UserPool1Domain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: my-first-domain-123456
+      UserPoolId: !Ref UserPool1
+       
+  UserPool2:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: UserPool2
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+
+  MyLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': 'Hello from Lambda!'
+              }
+      Runtime: python3.8
+
+  ApiGatewayRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: MyApi
+
+  ApiGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId:
+        Fn::GetAtt:
+          - ApiGatewayRestApi
+          - RootResourceId
+      PathPart: myresource
+      RestApiId:
+        Ref: ApiGatewayRestApi
+
+  ApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId:
+        Ref: ApiGatewayAuthorizer
+      AuthorizationScopes:
+        - "myresource/read"
+      HttpMethod: GET
+      ResourceId:
+        Ref: ApiGatewayResource
+      RestApiId:
+        Ref: ApiGatewayRestApi
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MyLambdaFunction.Arn}/invocations
+
+  ApiGatewayAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: MyCognitoAuthorizer
+      Type: COGNITO_USER_POOLS
+      IdentitySource: method.request.header.Authorization
+      RestApiId:
+        Ref: ApiGatewayRestApi
+      ProviderARNs:
+        - Fn::GetAtt:
+            - UserPool1
+            - Arn
+        - Fn::GetAtt:
+            - UserPool2
+            - Arn
+
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId:
+        Ref: ApiGatewayRestApi
+      StageName: v1
+    DependsOn: ApiGatewayMethod
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt MyLambdaFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*/GET/myresource
