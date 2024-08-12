@@ -10,7 +10,8 @@ Resources:
     Properties:
       Identifier: myresource
       Name: MyResourceServer
-      UserPoolId: !Ref UserPool1
+      UserPoolId: 
+        Ref: UserPool1
       Scopes:
         - ScopeName: read
           ScopeDescription: Read access
@@ -22,7 +23,8 @@ Resources:
     DependsOn: UserPool1ResourceServer
     Properties:
       ClientName: MyAppClient
-      UserPoolId: !Ref UserPool1
+      UserPoolId: 
+        Ref: UserPool1
       GenerateSecret: true
       AllowedOAuthFlows:
         - client_credentials
@@ -38,7 +40,8 @@ Resources:
     Type: AWS::Cognito::UserPoolDomain
     Properties:
       Domain: my-first-domain-123456
-      UserPoolId: !Ref UserPool1
+      UserPoolId: 
+        Ref: UserPool1
        
   UserPool2:
     Type: AWS::Cognito::UserPool
@@ -71,7 +74,8 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       Handler: index.handler
-      Role: !GetAtt LambdaExecutionRole.Arn
+      Role: 
+        Fn::GetAtt: LambdaExecutionRole.Arn
       Code:
         ZipFile: |
           def handler(event, context):
@@ -86,35 +90,54 @@ Resources:
     Properties:
       Name: MyApi
 
-  ApiGatewayResource:
+  ApiGatewayMyResource:
     Type: AWS::ApiGateway::Resource
     Properties:
       ParentId:
         Fn::GetAtt:
           - ApiGatewayRestApi
           - RootResourceId
-      PathPart: myresource
+      PathPart: '{proxy+}'
       RestApiId:
         Ref: ApiGatewayRestApi
 
-  ApiGatewayMethod:
+  RootResourceMethod:
     Type: AWS::ApiGateway::Method
     Properties:
+      ResourceId:
+        Fn::GetAtt:
+          - ApiGatewayRestApi
+          - RootResourceId
+      RestApiId:
+        Ref: ApiGatewayRestApi
+      AuthorizationType: None
+      HttpMethod: ANY
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MyLambdaFunction.Arn}/invocations
+    DependsOn: LambdaInvokePermission
+
+  MyResourceMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ResourceId:
+        Ref: ApiGatewayMyResource
+      RestApiId:
+        Ref: ApiGatewayRestApi
       AuthorizationType: COGNITO_USER_POOLS
       AuthorizerId:
         Ref: ApiGatewayAuthorizer
       AuthorizationScopes:
         - "myresource/read"
-      HttpMethod: GET
-      ResourceId:
-        Ref: ApiGatewayResource
-      RestApiId:
-        Ref: ApiGatewayRestApi
+      HttpMethod: ANY
       Integration:
-        IntegrationHttpMethod: POST
         Type: AWS_PROXY
+        IntegrationHttpMethod: POST
         Uri:
           Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MyLambdaFunction.Arn}/invocations
+    DependsOn: LambdaInvokePermission
 
   ApiGatewayAuthorizer:
     Type: AWS::ApiGateway::Authorizer
@@ -138,12 +161,16 @@ Resources:
       RestApiId:
         Ref: ApiGatewayRestApi
       StageName: v1
-    DependsOn: ApiGatewayMethod
+    DependsOn: 
+      - RootResourceMethod
+      - MyResourceMethod
 
   LambdaInvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !GetAtt MyLambdaFunction.Arn
+      FunctionName: 
+        Fn::GetAtt: MyLambdaFunction.Arn
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*/GET/myresource
+      SourceArn: 
+        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*/GET/myresource
